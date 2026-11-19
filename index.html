@@ -100,17 +100,45 @@ textarea{width:100%;min-height:150px;border:2px solid var(--sand);border-radius:
 .prev{background:var(--char);color:var(--ivory);border-radius:18px;padding:16px 20px;margin-top:12px;white-space:pre-wrap;min-height:60px}
 @media(max-width:600px){.two{grid-template-columns:1fr 1fr;gap:8px}h2{font-size:1.4rem}.tile{padding:14px 6px;font-size:.95rem}}
 @media(prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}
+/* 로그인 화면 */
+.loginwrap{min-height:100vh;display:grid;place-items:center;padding:24px 18px}
+.logincard{width:100%;max-width:440px;background:var(--ivory);border:1px solid var(--sand);border-radius:24px;padding:30px 26px;box-shadow:0 8px 24px rgba(52,48,45,.07)}
+.logincard h1{font-size:2.2rem;font-weight:800;margin:14px 0 8px}
+.logincard label{display:block;font-weight:700;margin:14px 0 6px;font-size:.95rem}
+.logincard input{width:100%;border:2px solid var(--sand);border-radius:14px;padding:12px 14px;font-family:inherit;font-size:1rem;background:#fff;color:var(--char)}
+.logincard input:focus-visible{outline:3px solid var(--red2);outline-offset:2px}
+.logincard .btn{width:100%;margin-top:16px}
+.userbar{display:flex;justify-content:flex-end;align-items:center;gap:10px;font-size:.9rem;color:var(--mut);flex-wrap:wrap}
 </style>
+<!-- Supabase 라이브러리 + 설정값. Secret/service_role 키는 절대 넣지 마세요. -->
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script>
+/* ============================================================
+   ★ 여기에 Supabase 값을 직접 입력하세요 (이 부분만 수정) ★
+   Supabase 대시보드 > Project Settings > API 에서 복사
+   - SUPABASE_URL : https://wtcwyeaupoeperqrspjf.supabase.co 형태
+   - SUPABASE_PUBLISHABLE_KEY : sb_publishable_m-7oK4ltZ3IhgoktJhq6DQ_GtfY8J7k로 시작
+   ※ Secret Key / service_role 키는 절대 넣지 마세요.
+   ============================================================ */
+window.CQ_CONFIG = {
+  SUPABASE_URL: 'https://wtcwyeaupoeperqrspjf.supabase.co',
+  SUPABASE_PUBLISHABLE_KEY: 'sb_publishable_m-7oK4ltZ3IhgoktJhq6DQ_GtfY8J7k'
+};
+</script>
 </head>
 <body>
 <div id="app"></div>
 
 <script>
 /* ===================== 저장 / 공통 도구 ===================== */
-const KEY = 'coachingQuest.v1';
-let S = null;
-try { S = JSON.parse(localStorage.getItem(KEY)); } catch (e) { S = null; }
-if (!S || !S.scores) S = { scores: {}, mission: '' };
+let KEY = 'coachingQuest.v1';
+let S = { scores: {}, mission: '' };
+/* 로그인한 사용자 ID별로 저장 칸을 나눕니다 (같은 PC를 여러 명이 써도 점수가 섞이지 않음) */
+function loadState(uid) {
+  KEY = 'coachingQuest.v1.' + uid;
+  try { S = JSON.parse(localStorage.getItem(KEY)); } catch (e) { S = null; }
+  if (!S || !S.scores) S = { scores: {}, mission: '' };
+}
 function save() { try { localStorage.setItem(KEY, JSON.stringify(S)); } catch (e) {} }
 
 const app = document.getElementById('app');
@@ -131,11 +159,13 @@ const gm = id => GAMES.find(g => g.id === id);
 
 /* ===================== 메인 화면 ===================== */
 function home() {
+  if (!AUTH.ok) { showLogin(); return; }
   clearInterval(timer);
   const done = GAMES.filter(g => S.scores[g.id] !== undefined).length;
   const total = GAMES.reduce((a, g) => a + (S.scores[g.id] || 0), 0);
   app.innerHTML = `<div class="wrap">
     <div class="hero">
+      <div class="userbar"><span id="ue"></span><button class="ghost" id="lo">로그아웃</button></div>
       <div class="logo"><i>CQ</i><span>LG전자 판매 매니저 코칭 플랫폼</span></div>
       <h1>COACHING QUEST</h1>
       <p class="sl">AI가 평가하고, 게임으로 발견하고, 코칭으로 성장한다.</p>
@@ -156,10 +186,13 @@ function home() {
   </div>`;
   bindAll('[data-g]', b => gm(b.dataset.g).run());
   $('#fm').onclick = mission;
+  $('#ue').textContent = AUTH.email;
+  $('#lo').onclick = logout;
   $('#rs').onclick = () => { if (confirm('저장된 점수와 작성한 문장이 모두 지워집니다. 계속할까요?')) { S = { scores: {}, mission: '' }; save(); home(); } };
 }
 
 function shell(tag, title, body, extra) {
+  if (!AUTH.ok) { showLogin(); throw new Error('로그인이 필요합니다.'); }
   app.innerHTML = `<div class="wrap"><div class="bar"><button class="ghost" id="back">← 메인으로</button><span class="tag">${tag}</span>${extra || ''}</div><h2>${title}</h2>${body}</div>`;
   $('#back').onclick = home;
   window.scrollTo(0, 0);
@@ -393,7 +426,97 @@ function copyText(t, btn) {
   if (navigator.clipboard && window.isSecureContext) navigator.clipboard.writeText(t).then(done, fallback); else fallback();
 }
 
-home();
+/* ===================== Supabase 로그인 / 접근 권한 ===================== */
+const AUTH = { ok: false, email: '' };
+const CFG = window.CQ_CONFIG || {};
+let sb = null;
+const MSG = {
+  session: '로그인 세션이 만료되었어요. 다시 로그인해 주세요.',
+  denied: '접근 권한이 없는 계정입니다. 관리자에게 문의해 주세요.',
+  error: '접근 권한을 확인하지 못했어요. 관리자에게 문의해 주세요.'
+};
+
+function authScreen(inner) {
+  clearInterval(timer);
+  app.innerHTML = `<div class="loginwrap"><div class="logincard">
+    <div class="logo"><i>CQ</i><span>LG전자 판매 매니저 코칭 플랫폼</span></div>
+    <h1>COACHING QUEST</h1>${inner}</div></div>`;
+}
+
+function loginMsg(text, kind) {
+  const el = $('#lm'); if (!el) return;
+  el.hidden = false; el.className = 'fb ' + (kind || ''); el.textContent = text;
+}
+
+function showLogin(msg, kind) {
+  AUTH.ok = false; AUTH.email = '';
+  authScreen(`<p style="font-weight:600;margin-bottom:6px">AI가 평가하고, 게임으로 발견하고, 코칭으로 성장한다.</p>
+    <form id="lf" autocomplete="on">
+      <label for="em">회사 이메일</label>
+      <input id="em" name="email" type="email" autocomplete="username" required placeholder="name@company.com">
+      <label for="pw">비밀번호</label>
+      <input id="pw" name="password" type="password" autocomplete="current-password" required>
+      <div id="lm" class="fb" hidden></div>
+      <button class="btn" id="lb" type="submit">로그인</button>
+    </form>
+    <p class="mut" style="margin-top:14px">관리자가 등록한 계정만 로그인할 수 있어요. 계정이 필요하면 관리자에게 문의해 주세요.</p>`);
+  if (msg) loginMsg(msg, kind);
+  $('#lf').onsubmit = async e => {
+    e.preventDefault();
+    const btn = $('#lb'); btn.disabled = true; btn.textContent = '확인 중…';
+    try {
+      const { error } = await sb.auth.signInWithPassword({ email: $('#em').value.trim(), password: $('#pw').value });
+      if (error) { loginMsg('이메일 또는 비밀번호를 확인해 주세요.', 'no'); btn.disabled = false; btn.textContent = '로그인'; return; }
+      await enter();
+    } catch (err) {
+      loginMsg('로그인 중 문제가 생겼어요. 인터넷 연결을 확인하고 다시 시도해 주세요.', 'no');
+      btn.disabled = false; btn.textContent = '로그인';
+    }
+  };
+}
+
+/* 서버에서 세션을 검증하고, 관리자가 승인한 계정(allowed_users)인지 확인합니다 */
+async function verify() {
+  const { data: u, error: ue } = await sb.auth.getUser();           // 서버에 토큰 검증 요청
+  if (ue || !u || !u.user) return { ok: false, why: 'session' };
+  const { data: row, error: re } = await sb.from('allowed_users').select('user_id').eq('user_id', u.user.id).maybeSingle();
+  if (re) return { ok: false, why: 'error' };
+  if (!row) return { ok: false, why: 'denied' };
+  return { ok: true, user: u.user };
+}
+
+async function enter() {
+  const v = await verify();
+  if (!v.ok) { await sb.auth.signOut(); showLogin(MSG[v.why], 'no'); return; }
+  AUTH.ok = true; AUTH.email = v.user.email || '';
+  loadState(v.user.id);
+  home();
+}
+
+async function logout() {
+  AUTH.ok = false; clearInterval(timer);
+  try { await sb.auth.signOut(); } catch (e) {}
+  showLogin('로그아웃되었어요.', 'ok');
+}
+
+async function startApp() {
+  if (!window.supabase) { authScreen('<div class="fb no">Supabase 라이브러리를 불러오지 못했어요. 인터넷 연결을 확인해 주세요.</div>'); return; }
+  const bad = !CFG.SUPABASE_URL || !CFG.SUPABASE_PUBLISHABLE_KEY || /YOUR/.test(CFG.SUPABASE_URL + CFG.SUPABASE_PUBLISHABLE_KEY);
+  if (bad) { authScreen('<div class="fb no">index.html 맨 위의 설정 위치에 Supabase URL과 Publishable Key를 입력해 주세요.</div>'); return; }
+  sb = window.supabase.createClient(CFG.SUPABASE_URL, CFG.SUPABASE_PUBLISHABLE_KEY, { auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: false } });
+  /* 다른 탭에서 로그아웃하거나 세션이 끝나면 즉시 로그인 화면으로 */
+  sb.auth.onAuthStateChange(ev => { if (ev === 'SIGNED_OUT' && AUTH.ok) showLogin('로그인이 해제되었어요. 다시 로그인해 주세요.', 'no'); });
+  /* 탭으로 돌아올 때 권한이 회수되었는지 다시 확인 */
+  document.addEventListener('visibilitychange', async () => {
+    if (document.visibilityState !== 'visible' || !AUTH.ok || !navigator.onLine) return;
+    const v = await verify();
+    if (!v.ok) { AUTH.ok = false; try { await sb.auth.signOut(); } catch (e) {} showLogin(MSG[v.why], 'no'); }
+  });
+  authScreen('<p class="mut">로그인 상태를 확인하고 있어요…</p>');
+  const { data } = await sb.auth.getSession();
+  if (data && data.session) await enter(); else showLogin();
+}
+startApp();
 </script>
 </body>
 </html>
